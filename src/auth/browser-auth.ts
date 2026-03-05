@@ -12,14 +12,20 @@ import type { AppConfig, TokenData } from "../types/index.js";
 import { BrowserAuthError } from "../utils/errors.js";
 import { log } from "../utils/logger.js";
 import { PurdueSSOFlow } from "./purdue-sso.js";
+import { MicrosoftSSOFlow } from "./microsoft-sso.js";
 
 export class BrowserAuth {
   private config: AppConfig;
-  private ssoFlow: PurdueSSOFlow;
+  private purdueSSO: PurdueSSOFlow;
+  private microsoftSSO: MicrosoftSSOFlow;
 
   constructor(config: AppConfig) {
     this.config = config;
-    this.ssoFlow = new PurdueSSOFlow({
+    this.purdueSSO = new PurdueSSOFlow({
+      username: config.username,
+      password: config.password,
+    });
+    this.microsoftSSO = new MicrosoftSSOFlow({
       username: config.username,
       password: config.password,
     });
@@ -346,20 +352,33 @@ export class BrowserAuth {
   private async navigateAndLogin(page: Page): Promise<boolean> {
     try {
       log("INFO", `Navigating to ${this.config.baseUrl}/d2l/home`);
+      
+      // Navigate to home and wait for it to settle
       await page.goto(`${this.config.baseUrl}/d2l/home`, {
-        waitUntil: "domcontentloaded",
+        waitUntil: "load",
         timeout: 30000,
       });
 
-      const currentUrl = page.url();
+      // Wait a moment for any instant redirects to Microsoft/SSO
+      await page.waitForTimeout(2000);
+
+      let currentUrl = page.url();
       log("DEBUG", `Current URL after navigation: ${currentUrl}`);
 
-      // If we were redirected away from /d2l/home, login is required
-      const needsLogin = !currentUrl.includes("/d2l/home");
+      // If we were redirected away from /d2l/home or /d2l/lp/homepage, login is required
+      const isAtHome = currentUrl.includes("/d2l/home") || currentUrl.includes("/d2l/lp/homepage");
+      const needsLogin = !isAtHome;
 
       if (needsLogin) {
         log("INFO", `Login required (redirected to ${currentUrl}) - starting SSO flow`);
-        const loginSuccess = await this.ssoFlow.login(page);
+        
+        let loginSuccess = false;
+        if (currentUrl.includes("login.microsoftonline.com")) {
+          loginSuccess = await this.microsoftSSO.login(page);
+        } else {
+          // Default to Purdue flow (handles campus selector + Shibboleth)
+          loginSuccess = await this.purdueSSO.login(page);
+        }
 
         if (!loginSuccess) {
           throw new BrowserAuthError("SSO login flow failed", "sso_login");

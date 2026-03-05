@@ -63,7 +63,8 @@ export class PurdueSSOFlow {
 
   private async handleCampusSelector(page: Page): Promise<void> {
     const currentUrl = page.url();
-    if (currentUrl.includes("/d2l/login")) {
+    // Only handle campus selector if we are on Purdue's login page
+    if (currentUrl.includes("purdue.brightspace.com/d2l/login")) {
       // Campus selector buttons are inside a shadow DOM — navigate directly
       // to Purdue's Shibboleth SAML endpoint instead of clicking them
       const baseUrl = new URL(currentUrl).origin;
