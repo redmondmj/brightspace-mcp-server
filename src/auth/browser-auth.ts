@@ -121,13 +121,39 @@ export class BrowserAuth {
       // Navigate and login if needed
       const alreadyAuthenticated = await this.navigateAndLogin(page);
 
-      // If already authenticated via cookies, Bearer tokens won't appear in
-      // normal page requests. Try strategies to extract a usable token.
-      // Each strategy validates the token against /users/whoami before accepting.
+      // If already authenticated via cookies, try strategies to extract a usable token.
+      // We now PRIORITIZE cookie-based auth because it has full permissions (including POST).
       if (alreadyAuthenticated) {
-        log("INFO", "Session cookies active — trying to extract API token");
+        log("INFO", "Session cookies active — validating full session token");
 
-        // Strategy 0: Try extracting Bearer token from localStorage (fastest)
+        // Strategy 1: Extract session cookies for cookie-based API auth (Full permissions)
+        const cookieToken = await this.extractCookieToken(context);
+        if (cookieToken) {
+          // Check if we got the critical CSRF token
+          const hasCsrf = cookieToken.includes("d2l_rf=");
+          
+          const valid = await this.validateToken(cookieToken);
+          if (valid && hasCsrf) {
+            log("INFO", "Extracted valid session cookie with CSRF (Full Faculty permissions enabled)");
+            const now = Date.now();
+            const tokenData: TokenData = {
+              accessToken: cookieToken,
+              capturedAt: now,
+              expiresAt: now + this.config.tokenTtl * 1000,
+              source: "browser",
+            };
+            await this.saveStorageState(context);
+            return tokenData;
+          }
+          
+          if (!hasCsrf) {
+            log("WARN", "Existing session missing CSRF token (d2l_rf), forcing re-login to refresh security tokens");
+          } else {
+            log("WARN", "Cookie token failed validation, trying Bearer extraction");
+          }
+        }
+
+        // Strategy 2: Try extracting Bearer token from localStorage (Limited permissions)
         const localStorageToken = await this.extractLocalStorageToken(page);
         if (localStorageToken) {
           const valid = await this.validateToken(localStorageToken);
@@ -144,55 +170,6 @@ export class BrowserAuth {
             return tokenData;
           }
           log("WARN", "localStorage Bearer token failed validation, trying next strategy");
-        }
-
-        // Strategy 1: Navigate to API endpoint to trigger Bearer-bearing requests
-        try {
-          log("DEBUG", "Navigating to API endpoint to trigger token capture");
-          await page.goto(
-            `${this.config.baseUrl}/d2l/api/lp/1.57/users/whoami`,
-            { waitUntil: "load", timeout: 15000 }
-          );
-        } catch {
-          log("DEBUG", "Direct API navigation did not produce Bearer token");
-        }
-
-        // Strategy 2: Try extracting XSRF token from D2L's JavaScript context
-        const xsrfToken = await this.extractXsrfToken(page);
-        if (xsrfToken) {
-          const valid = await this.validateToken(xsrfToken);
-          if (valid) {
-            log("INFO", "Extracted valid XSRF token from page context");
-            const now = Date.now();
-            const tokenData: TokenData = {
-              accessToken: xsrfToken,
-              capturedAt: now,
-              expiresAt: now + this.config.tokenTtl * 1000,
-              source: "browser",
-            };
-            await this.saveStorageState(context);
-            return tokenData;
-          }
-          log("WARN", "XSRF token failed validation, trying next strategy");
-        }
-
-        // Strategy 3: Extract session cookies for cookie-based API auth
-        const cookieToken = await this.extractCookieToken(context);
-        if (cookieToken) {
-          const valid = await this.validateToken(cookieToken);
-          if (valid) {
-            log("INFO", "Extracted valid session cookie for API auth");
-            const now = Date.now();
-            const tokenData: TokenData = {
-              accessToken: cookieToken,
-              capturedAt: now,
-              expiresAt: now + this.config.tokenTtl * 1000,
-              source: "browser",
-            };
-            await this.saveStorageState(context);
-            return tokenData;
-          }
-          log("WARN", "Cookie token failed validation, trying next strategy");
         }
 
         // Strategy 4: Clear cookies and force full re-login through SSO
@@ -516,34 +493,46 @@ export class BrowserAuth {
 
   /**
    * Extract D2L session cookies that can be used for cookie-based API auth.
-   * Constructs a cookie header string from d2lSessionVal and d2lSecureSessionVal.
+   * Constructs a cookie header string from all available D2L cookies.
    */
   private async extractCookieToken(
     context: BrowserContext
   ): Promise<string | null> {
     try {
-      const cookies = await context.cookies(this.config.baseUrl);
-      const relevantCookies = cookies.filter(
-        (c) =>
-          c.name === "d2lSessionVal" ||
-          c.name === "d2lSecureSessionVal" ||
-          c.name.startsWith("d2l")
+      // Just wait a few seconds for all background cookies (including CSRF) to settle
+      log("DEBUG", "Waiting for session cookies to settle...");
+      await new Promise(resolve => setTimeout(resolve, 5000));
+
+      // Capture ALL cookies from the root domain to be safe
+      const domain = new URL(this.config.baseUrl).hostname;
+      const cookies = await context.cookies();
+      
+      const relevantCookies = cookies.filter(c => 
+        c.domain.includes("brightspace.com") || c.domain.includes(domain)
       );
 
       if (relevantCookies.length === 0) {
-        log("DEBUG", "No D2L session cookies found");
+        log("DEBUG", "No relevant D2L session cookies found in context");
         return null;
       }
 
-      // Build a cookie string for API requests
+      // Build a comprehensive cookie string for API requests
       const cookieStr = relevantCookies
         .map((c) => `${c.name}=${c.value}`)
         .join("; ");
 
       log(
         "DEBUG",
-        `Found ${relevantCookies.length} D2L cookies: ${relevantCookies.map((c) => c.name).join(", ")}`
+        `Captured ${relevantCookies.length} cookies. Names: ${relevantCookies.map(c => c.name).join(", ")}`
       );
+      
+      const hasCsrf = relevantCookies.some(c => c.name === 'd2l_rf');
+      if (hasCsrf) {
+        log("INFO", "CSRF token (d2l_rf) successfully captured");
+      } else {
+        log("WARN", "d2l_rf cookie still missing - POST requests may fail");
+      }
+
       return `cookie:${cookieStr}`;
     } catch (error) {
       log("DEBUG", "Cookie extraction failed", error);

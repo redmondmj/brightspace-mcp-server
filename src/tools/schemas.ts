@@ -30,6 +30,14 @@ export const GetAnnouncementsSchema = z.object({
   count: z.coerce.number().int().min(1).max(50).default(10).describe("Maximum number of announcements to return"),
 });
 
+export const CreateAnnouncementSchema = z.object({
+  courseId: z.coerce.number().int().positive().describe("Course ID to create the announcement in."),
+  title: z.string().min(1).describe("Title of the announcement."),
+  content: z.string().min(1).describe("HTML or plain text content of the announcement."),
+  isPublished: z.boolean().default(true).describe("Whether to publish the announcement immediately. Default is true."),
+  isPinned: z.boolean().default(false).describe("Whether to pin the announcement to the top. Default is false."),
+});
+
 export const GetAssignmentsSchema = z.object({
   courseId: z.coerce.number().int().positive().optional()
     .describe("Course ID to get assignments for. If omitted, returns assignments for all enrolled courses."),

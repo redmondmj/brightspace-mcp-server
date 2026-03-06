@@ -19,6 +19,7 @@ import {
   registerGetUpcomingDueDates,
   registerGetMyGrades,
   registerGetAnnouncements,
+  registerCreateAnnouncement,
   registerGetAssignments,
   registerGetCourseContent,
   registerDownloadFile,
@@ -52,19 +53,18 @@ if (subcommand === 'setup') {
       const config = loadConfig();
       log("DEBUG", "Configuration loaded", { sessionDir: config.sessionDir });
 
-      // Create MCP server instance
-      const server = new McpServer({
-        name: "brightspace",
-        version: "1.1.2",
-        description: "Brightspace MCP Server — by Rohan Muppa (github.com/rohanmuppa/brightspace-mcp-server)",
-      });
-      log("INFO", "");
-      log("INFO", "========================================");
-      log("INFO", "  Brightspace MCP Server v1.1.2");
-      log("INFO", "  By Rohan Muppa — ECE @ Purdue");
-      log("INFO", "  github.com/rohanmuppa/brightspace-mcp-server");
-      log("INFO", "========================================");
-      log("INFO", "");
+  const server = new McpServer({
+    name: "brightspace",
+    version: "1.1.5",
+    description: "Brightspace MCP Server — by Rohan Muppa (github.com/rohanmuppa/brightspace-mcp-server)",
+  });
+  log("INFO", "");
+  log("INFO", "========================================");
+  log("INFO", "  Brightspace MCP Server v1.1.5");
+  log("INFO", "  By Rohan Muppa — ECE @ Purdue");
+  log("INFO", "  github.com/rohanmuppa/brightspace-mcp-server");
+  log("INFO", "========================================");
+  log("INFO", "");
 
       // Create TokenManager for reading cached tokens
       const tokenManager = new TokenManager(config.sessionDir);
@@ -166,6 +166,7 @@ if (subcommand === 'setup') {
       registerGetUpcomingDueDates(server, apiClient, config);
       registerGetMyGrades(server, apiClient, config);
       registerGetAnnouncements(server, apiClient, config);
+      registerCreateAnnouncement(server, apiClient);
       registerGetAssignments(server, apiClient, config);
       registerGetCourseContent(server, apiClient);
       registerDownloadFile(server, apiClient);
@@ -173,13 +174,13 @@ if (subcommand === 'setup') {
       registerGetRoster(server, apiClient);
       registerGetSyllabus(server, apiClient);
       registerGetDiscussions(server, apiClient);
-      log("DEBUG", "MCP tools registered (11 core tools, total 12 with check_auth)");
+      log("DEBUG", "MCP tools registered (12 core tools, total 13 with check_auth)");
 
       // Connect stdio transport
       const transport = new StdioServerTransport();
       await server.connect(transport);
 
-      log("INFO", "Brightspace MCP Server by Rohan Muppa — running on stdio (12 tools registered)");
+      log("INFO", "Brightspace MCP Server by Rohan Muppa — running on stdio (13 tools registered)");
       log("INFO", "Setup: see README.md for MCP client configuration (Claude Desktop, ChatGPT Desktop, Cursor, etc.)");
     } catch (error) {
       log("ERROR", "MCP Server failed to start", error);

@@ -26,7 +26,7 @@ import { log } from "../utils/logger.js";
  * - Raw response passthrough (no transformation)
  */
 export class D2LApiClient {
-  private readonly baseUrl: string;
+  public readonly baseUrl: string;
   private readonly tokenManager: D2LApiClientOptions["tokenManager"];
   private readonly cache: TTLCache;
   private readonly rateLimiter: TokenBucket;
@@ -34,6 +34,7 @@ export class D2LApiClient {
   private readonly timeoutMs: number;
   private readonly onAuthExpired?: () => Promise<boolean>;
   private versions: ApiVersions | null = null;
+  private isPrimed: boolean = false;
 
   constructor(options: D2LApiClientOptions) {
     // HTTPS-only enforcement
@@ -92,6 +93,22 @@ export class D2LApiClient {
   }
 
   /**
+   * Prime the session by making a simple GET request.
+   * This ensures we have the latest cookies and CSRF tokens from the server.
+   */
+  async primeSession(): Promise<void> {
+    if (this.isPrimed) return;
+    try {
+      log("DEBUG", "Priming D2L session...");
+      await this.get(this.lp("/users/whoami"));
+      this.isPrimed = true;
+      log("DEBUG", "Session primed successfully");
+    } catch (error) {
+      log("WARN", "Failed to prime session, continuing anyway", error);
+    }
+  }
+
+  /**
    * Make a GET request to the D2L API.
    *
    * @param path - API path (e.g., "/d2l/api/lp/1.56/users/whoami")
@@ -118,14 +135,150 @@ export class D2LApiClient {
 
     // Make request with retry logic
     try {
-      return await this.makeRequest<T>(path, token, options);
+      return await this.makeRequest<T>(path, token, "GET", undefined, options);
     } catch (error) {
       if (error instanceof ApiError && error.status === 401) {
         // Final attempt: auto-reauth and retry once
         const freshToken = await this.tryAutoReauth(path);
-        return await this.makeRequest<T>(path, freshToken, options);
+        return await this.makeRequest<T>(path, freshToken, "GET", undefined, options);
       }
       throw error;
+    }
+  }
+
+  /**
+   * Make a POST request to the D2L API.
+   *
+   * @param path - API path
+   * @param body - Request body (JSON-serializable)
+   * @returns Parsed JSON response
+   */
+  async post<T>(path: string, body: any): Promise<T> {
+    // Prime session for CSRF tokens if using cookies
+    await this.primeSession();
+
+    // Enforce rate limit
+    await this.rateLimiter.consume();
+
+    // Get authentication token — auto-reauth if expired
+    let token = await this.tokenManager.getToken();
+    if (!token) {
+      token = await this.tryAutoReauth(path);
+    }
+
+    // Make request with retry logic
+    try {
+      return await this.makeRequest<T>(path, token, "POST", body);
+    } catch (error) {
+      if (error instanceof ApiError && error.status === 401) {
+        // Final attempt: auto-reauth and retry once
+        const freshToken = await this.tryAutoReauth(path);
+        return await this.makeRequest<T>(path, freshToken, "POST", body);
+      }
+      throw error;
+    }
+  }
+
+  /**
+   * Make a POST request to the D2L API using multipart/mixed.
+   * Required for certain endpoints like /news/ (even with no attachments).
+   *
+   * @param path - API path
+   * @param body - The JSON metadata part
+   * @returns Parsed JSON response
+   */
+  async postMultipart<T>(path: string, body: any): Promise<T> {
+    // Prime session for CSRF tokens if using cookies
+    await this.primeSession();
+
+    // Enforce rate limit
+    await this.rateLimiter.consume();
+
+    // Get authentication token — auto-reauth if expired
+    let token = await this.tokenManager.getToken();
+    if (!token) {
+      token = await this.tryAutoReauth(path);
+    }
+
+    // Make request with retry logic
+    try {
+      return await this.makeMultipartRequest<T>(path, token, body);
+    } catch (error) {
+      if (error instanceof ApiError && error.status === 401) {
+        // Final attempt: auto-reauth and retry once
+        const freshToken = await this.tryAutoReauth(path);
+        return await this.makeMultipartRequest<T>(path, freshToken, body);
+      }
+      throw error;
+    }
+  }
+
+  /**
+   * Internal method to make a multipart/mixed request.
+   */
+  private async makeMultipartRequest<T>(
+    path: string,
+    token: TokenData,
+    jsonBody: any,
+    isRetry: boolean = false,
+  ): Promise<T> {
+    const url = `${this.baseUrl}${path}`;
+    const headers = this.buildAuthHeaders(token);
+
+    // Build multipart/mixed body
+    const boundary = "xx-brightspace-mcp-boundary-xx";
+    headers["Content-Type"] = `multipart/mixed; boundary=${boundary}`;
+
+    const body = [
+      `--${boundary}`,
+      "Content-Type: application/json; charset=utf-8",
+      "",
+      JSON.stringify(jsonBody),
+      `--${boundary}--`,
+      ""
+    ].join("\r\n");
+
+    try {
+      log("DEBUG", `${isRetry ? "Retrying" : "Requesting"} POST (multipart) ${path}`);
+
+      const response = await fetch(url, {
+        method: "POST",
+        headers,
+        body,
+        signal: AbortSignal.timeout(this.timeoutMs),
+      });
+
+      // Same 401/429/403/non-OK handling as makeRequest
+      if (response.status === 401) {
+        if (isRetry) {
+          await this.tokenManager.clearToken();
+          throw new ApiError(401, path, "Session expired.");
+        }
+        const freshToken = await this.tokenManager.getToken();
+        if (!freshToken || freshToken.accessToken === token.accessToken) {
+          await this.tokenManager.clearToken();
+          throw new ApiError(401, path, "Session expired.");
+        }
+        return await this.makeMultipartRequest<T>(path, freshToken, jsonBody, true);
+      }
+
+      if (response.status === 429) {
+        const retryAfter = response.headers.get("Retry-After");
+        throw new RateLimitError(path, retryAfter ? parseInt(retryAfter, 10) : undefined);
+      }
+
+      if (!response.ok) {
+        const text = await response.text();
+        log("ERROR", `API error response (multipart, ${response.status}): ${text}`);
+        throw new ApiError(response.status, path, text);
+      }
+
+      return await response.json();
+    } catch (error) {
+      if (error instanceof ApiError || error instanceof RateLimitError || error instanceof NetworkError) {
+        throw error;
+      }
+      throw new NetworkError(`Request to ${path} failed: ${error}`, error instanceof Error ? error : undefined);
     }
   }
 
@@ -188,18 +341,25 @@ export class D2LApiClient {
   private async makeRequest<T>(
     path: string,
     token: TokenData,
+    method: "GET" | "POST" | "PUT" | "DELETE" = "GET",
+    body?: any,
     options?: { ttl?: number },
     isRetry: boolean = false,
   ): Promise<T> {
     const url = `${this.baseUrl}${path}`;
     const headers = this.buildAuthHeaders(token);
 
+    if (body) {
+      headers["Content-Type"] = "application/json; charset=utf-8";
+    }
+
     try {
-      log("DEBUG", `${isRetry ? "Retrying" : "Requesting"} GET ${path}`);
+      log("DEBUG", `${isRetry ? "Retrying" : "Requesting"} ${method} ${path}`);
 
       const response = await fetch(url, {
-        method: "GET",
+        method,
         headers,
+        body: body ? JSON.stringify(body) : undefined,
         signal: AbortSignal.timeout(this.timeoutMs),
       });
 
@@ -231,7 +391,7 @@ export class D2LApiClient {
         }
 
         // Retry with fresh token
-        return await this.makeRequest<T>(path, freshToken, options, true);
+        return await this.makeRequest<T>(path, freshToken, method, body, options, true);
       }
 
       // Handle 429 rate limiting
@@ -250,13 +410,14 @@ export class D2LApiClient {
       // Handle other non-OK responses
       if (!response.ok) {
         const responseText = await response.text();
+        log("ERROR", `API error response (${response.status}): ${responseText}`);
         throw new ApiError(response.status, path, responseText);
       }
 
       // Parse and cache response
       const data: T = await response.json();
 
-      if (options?.ttl) {
+      if (options?.ttl && method === "GET") {
         this.cache.set(path, data, options.ttl);
         log("DEBUG", `Cached response for ${path} (TTL: ${options.ttl}ms)`);
       }
@@ -275,7 +436,7 @@ export class D2LApiClient {
       // Wrap network/fetch errors
       const message = error instanceof Error ? error.message : String(error);
       throw new NetworkError(
-        `Request to ${path} failed: ${message}`,
+        `Request to ${method} ${path} failed: ${message}`,
         error instanceof Error ? error : undefined,
       );
     }
@@ -353,6 +514,7 @@ export class D2LApiClient {
       // Handle other non-OK responses
       if (!response.ok) {
         const responseText = await response.text();
+        log("ERROR", `API error response (raw, ${response.status}): ${responseText}`);
         throw new ApiError(response.status, path, responseText);
       }
 
@@ -385,13 +547,26 @@ export class D2LApiClient {
     const headers: Record<string, string> = {
       "User-Agent":
         "BrightspaceMCP/1.0 (Rohan Muppa; github.com/rohanmuppa/brightspace-mcp-server)",
+      "Origin": this.baseUrl,
+      "Referer": `${this.baseUrl}/d2l/home`,
     };
 
     // Auto-detect cookie vs Bearer auth based on "cookie:" prefix
     if (token.accessToken.startsWith("cookie:")) {
       // Cookie-based auth: strip prefix and set Cookie header
-      headers["Cookie"] = token.accessToken.substring(7);
+      const cookieString = token.accessToken.substring(7);
+      headers["Cookie"] = cookieString;
       log("DEBUG", "Using cookie-based authentication");
+
+      // Extract CSRF token (d2l_rf) from cookies if present
+      const csrfMatch = cookieString.match(/d2l_rf=([^;]+)/);
+      if (csrfMatch && csrfMatch[1]) {
+        headers["X-Csrf-Token"] = csrfMatch[1];
+        log("DEBUG", `CSRF token extracted: ${csrfMatch[1].substring(0, 5)}...`);
+      } else {
+        log("WARN", "No d2l_rf cookie found in session! POST requests will likely fail.");
+        log("DEBUG", `Cookie string preview: ${cookieString.substring(0, 50)}...`);
+      }
     } else {
       // Bearer token auth
       headers["Authorization"] = `Bearer ${token.accessToken}`;
