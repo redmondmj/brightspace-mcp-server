@@ -12,6 +12,7 @@ export { registerGetAnnouncements } from "./get-announcements.js";
 export { registerCreateAnnouncement } from "./create-announcement.js";
 export { registerGetAssignments } from "./get-assignments.js";
 export { registerGetCourseContent } from "./get-course-content.js";
+export { registerManageContent } from "./manage-content.js";
 export { registerDownloadFile } from "./download-file.js";
 export { registerGetClasslistEmails } from "./get-classlist-emails.js";
 export { registerGetRoster } from "./get-roster.js";

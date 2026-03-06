@@ -22,6 +22,7 @@ import {
   registerCreateAnnouncement,
   registerGetAssignments,
   registerGetCourseContent,
+  registerManageContent,
   registerDownloadFile,
   registerGetClasslistEmails,
   registerGetRoster,
@@ -53,18 +54,20 @@ if (subcommand === 'setup') {
       const config = loadConfig();
       log("DEBUG", "Configuration loaded", { sessionDir: config.sessionDir });
 
-  const server = new McpServer({
-    name: "brightspace",
-    version: "1.1.5",
-    description: "Brightspace MCP Server — by Rohan Muppa (github.com/rohanmuppa/brightspace-mcp-server)",
-  });
-  log("INFO", "");
-  log("INFO", "========================================");
-  log("INFO", "  Brightspace MCP Server v1.1.5");
-  log("INFO", "  By Rohan Muppa — ECE @ Purdue");
-  log("INFO", "  github.com/rohanmuppa/brightspace-mcp-server");
-  log("INFO", "========================================");
-  log("INFO", "");
+      // Create MCP server instance
+      const server = new McpServer({
+        name: "brightspace",
+        version: "1.1.5",
+        description: "Brightspace MCP Server — by Rohan Muppa (github.com/rohanmuppa/brightspace-mcp-server)",
+      });
+
+      log("INFO", "");
+      log("INFO", "========================================");
+      log("INFO", "  Brightspace MCP Server v1.1.5");
+      log("INFO", "  By Rohan Muppa — ECE @ Purdue");
+      log("INFO", "  github.com/rohanmuppa/brightspace-mcp-server");
+      log("INFO", "========================================");
+      log("INFO", "");
 
       // Create TokenManager for reading cached tokens
       const tokenManager = new TokenManager(config.sessionDir);
@@ -92,7 +95,7 @@ if (subcommand === 'setup') {
       // Start background update check (fire and forget)
       initUpdateChecker();
 
-      // Register check_auth tool (no input schema needed for zero-argument tool)
+      // Register check_auth tool
       server.registerTool(
         "check_auth",
         {
@@ -100,66 +103,29 @@ if (subcommand === 'setup') {
           description:
             "Check if you are authenticated with Brightspace. " +
             "Run the brightspace-auth CLI first to authenticate. " +
-            "Use this when the user asks if they're logged in, if authentication is working, " +
-            "or when other tools return auth errors.",
+            "Use this when the user asks if they're logged in.",
         },
         async () => {
           log("DEBUG", "check_auth tool called");
-
           let token = await tokenManager.getToken();
-
           if (!token) {
             log("INFO", "check_auth: No valid token, attempting auto-reauthentication...");
-
             const success = await authRunner.run();
             if (success) {
               token = await tokenManager.getToken();
             }
-
             if (!token) {
-              log("INFO", "check_auth: Auto-reauthentication failed or produced no valid token");
-
-              const content: Array<{ type: "text"; text: string }> = [
-                {
-                  type: "text",
-                  text: "Not authenticated. Auto-reauthentication was attempted but failed. " +
-                    "Please run `brightspace-auth` manually in your terminal to log in. " +
-                    "Make sure your credentials in .env are correct and your internet connection is stable.",
-                },
-              ];
-              const notice = getUpdateNotice();
-              if (notice) content.push({ type: "text", text: notice });
-              return { content };
+              return {
+                content: [{ type: "text", text: "Not authenticated. Run `npm run auth`." }],
+              };
             }
-
-            log("INFO", "check_auth: Auto-reauthentication succeeded");
           }
-
           const expiresIn = Math.round((token.expiresAt - Date.now()) / 1000 / 60);
-          log("INFO", `check_auth: Token valid, expires in ~${expiresIn} minutes`);
-
-          const content: Array<{ type: "text"; text: string }> = [
-            {
-              type: "text",
-              text: `Authenticated with Brightspace. Token expires in ~${expiresIn} minutes. Source: ${token.source}.`,
-            },
-          ];
-          const notice = getUpdateNotice();
-          if (notice) content.push({ type: "text", text: notice });
-          return { content };
+          return {
+            content: [{ type: "text", text: `Authenticated. Expires in ~${expiresIn} minutes.` }],
+          };
         }
       );
-
-      log("DEBUG", "check_auth tool registered");
-
-      // Log active course filter config if any filter is set
-      if (config.courseFilter.includeCourseIds || config.courseFilter.excludeCourseIds || !config.courseFilter.activeOnly) {
-        log("DEBUG", "Course filter config", {
-          include: config.courseFilter.includeCourseIds,
-          exclude: config.courseFilter.excludeCourseIds,
-          activeOnly: config.courseFilter.activeOnly,
-        });
-      }
 
       // Register MCP tools
       registerGetMyCourses(server, apiClient, config);
@@ -169,19 +135,20 @@ if (subcommand === 'setup') {
       registerCreateAnnouncement(server, apiClient);
       registerGetAssignments(server, apiClient, config);
       registerGetCourseContent(server, apiClient);
+      registerManageContent(server, apiClient);
       registerDownloadFile(server, apiClient);
       registerGetClasslistEmails(server, apiClient);
       registerGetRoster(server, apiClient);
       registerGetSyllabus(server, apiClient);
       registerGetDiscussions(server, apiClient);
-      log("DEBUG", "MCP tools registered (12 core tools, total 13 with check_auth)");
+
+      log("DEBUG", "MCP tools registered (14 core tools, total 15 with check_auth)");
 
       // Connect stdio transport
       const transport = new StdioServerTransport();
       await server.connect(transport);
 
-      log("INFO", "Brightspace MCP Server by Rohan Muppa — running on stdio (13 tools registered)");
-      log("INFO", "Setup: see README.md for MCP client configuration (Claude Desktop, ChatGPT Desktop, Cursor, etc.)");
+      log("INFO", "Brightspace MCP Server by Rohan Muppa — running on stdio (15 tools registered)");
     } catch (error) {
       log("ERROR", "MCP Server failed to start", error);
       process.exit(1);

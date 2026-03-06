@@ -54,6 +54,23 @@ export const GetCourseContentSchema = z.object({
     .describe("Limit recursive depth of the content tree. Depth 1 returns top-level modules with direct children only. Useful for getting a table of contents without all nested content."),
 });
 
+export const CreateModuleSchema = z.object({
+  courseId: z.coerce.number().int().positive().describe("Course ID to create the module in."),
+  title: z.string().min(1).describe("Title of the module."),
+  description: z.string().optional().describe("Description of the module (HTML supported)."),
+  parentModuleId: z.coerce.number().int().positive().optional().describe("Parent module ID if this is a sub-module. If omitted, creates a root module."),
+  isHidden: z.boolean().default(false).describe("Whether the module is hidden from students. Default is false."),
+});
+
+export const CreateLinkTopicSchema = z.object({
+  courseId: z.coerce.number().int().positive().describe("Course ID."),
+  moduleId: z.coerce.number().int().positive().describe("Module ID to place the link in."),
+  title: z.string().min(1).describe("Title of the link topic."),
+  url: z.string().url().describe("The URL of the link."),
+  description: z.string().optional().describe("Description of the link (HTML supported)."),
+  isHidden: z.boolean().default(false).describe("Whether the topic is hidden from students. Default is false."),
+});
+
 export const GetClasslistEmailsSchema = z.object({
   courseId: z.coerce.number().int().positive()
     .describe("Course ID to get emails for."),
