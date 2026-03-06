@@ -63,6 +63,28 @@ Add the following to your `%APPDATA%\Claude\claude_desktop_config.json`:
 ```
 *Replace `C:/PATH/TO/YOUR/` with your actual project path.*
 
+## Multi-Platform Integration
+
+Since this server follows the standard **Model Context Protocol (MCP)**, it works with any compatible AI client. Use the following configurations:
+
+### Gemini CLI
+Add this to your `gemini-cli.json` or use the `--mcp` flag:
+```bash
+gemini --mcp node C:/PATH/TO/YOUR/brightspace-mcp-server/build/index.js
+```
+
+### ChatGPT Desktop
+1. Open ChatGPT Desktop Settings → **Tools**.
+2. Click **Add MCP Tool** → **Add Manually**.
+3. Use `node` as the command and the full path to `build/index.js` as the argument.
+
+### Cursor / Antigravity
+1. Open Cursor Settings → **Features** → **MCP**.
+2. Click **+ Add New MCP Server**.
+3. **Name**: `Brightspace Faculty`
+4. **Type**: `command`
+5. **Command**: `node C:/PATH/TO/YOUR/brightspace-mcp-server/build/index.js`
+
 ## Faculty Features
 
 In addition to standard "read" operations, this fork includes tools designed specifically for instructors:
