@@ -163,6 +163,19 @@ npx brightspace-mcp-server auth
 - All traffic to Brightspace is HTTPS
 - Nothing is sent anywhere except your school's login page
 
+## Technical Implementation
+
+This project is a high-performance fork of the original Purdue University MCP server, expanded to support universal authentication and faculty-grade "write" operations.
+
+### Key Innovations:
+- **Client-Side Session Emulation**: Instead of requiring restricted admin-level API keys, the server uses **Playwright** to launch an isolated browser context. It intercepts and captures full session authority, including persistent cookies and the `d2l_rf` anti-XSRF tokens.
+- **Universal SSO Support**: Replaced university-specific login logic with a generic **Microsoft Entra ID (Azure AD)** flow, enabling automated MFA handling for any institution using Microsoft login portals.
+- **CSRF Bypass & Header Spoofing**: Enabled faculty features (like `create_announcement`) by injecting captured security tokens into raw HTTP requests and spoofing `Origin`/`Referer` headers to mirror real browser behavior.
+- **Payload Mirroring**: Dynamically adjusts JSON schemas to match specific institutional D2L versions, ensuring compatibility with both modern and legacy News/Grades services.
+
+### Security Note:
+The server operates strictly within your existing user permissions. It does not bypass university security; it simply automates the tools you already have access to via the web interface. All sensitive session data is stored locally and encrypted using **AES-256-GCM**.
+
 ## Built With
 
 ![TypeScript](https://img.shields.io/badge/TypeScript-3178C6?logo=typescript&logoColor=white)
