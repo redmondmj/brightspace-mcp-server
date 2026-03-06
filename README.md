@@ -1,199 +1,96 @@
-# Brightspace MCP Server
+# Brightspace Faculty MCP Server
 
-> **By [Rohan Muppa](https://github.com/rohanmuppa), ECE @ Purdue**
+> **A Faculty-focused fork of the [Purdue Brightspace MCP Server](https://github.com/rohanmuppa/brightspace-mcp-server)**
 
-Talk to your Brightspace courses with AI. Ask about grades, due dates, announcements, and more. Works with Claude, ChatGPT, and Cursor.
+Manage your courses, grades, and class announcements directly through AI. This project expands the original student-facing server with **Faculty-grade features** and universal **Microsoft SSO support**.
 
-This is an [MCP (Model Context Protocol)](https://modelcontextprotocol.io) server. MCP lets AI apps like ChatGPT or Claude talk to outside tools. This server connects your AI to Brightspace so it can pull your grades, assignments, and course content on demand.
+## Overview
 
-Works with any school that uses Brightspace.
+This is an [MCP (Model Context Protocol)](https://modelcontextprotocol.io) server that connects AI assistants (Claude, ChatGPT, Cursor) to Brightspace (D2L). While the original server was built for students, this fork implements **Client-Side Session Emulation** to enable high-permission faculty operations without requiring restricted API keys.
 
-<p align="center">
-  <img src="https://raw.githubusercontent.com/RohanMuppa/brightspace-mcp-server/main/docs/how-it-works.svg" alt="Architecture diagram" width="100%">
-</p>
+## Installation & Setup
 
-## Try It
+Since this is a custom fork with advanced features, you must install it from source:
 
-> "Download my lecture slides and turn them into interactive flashcards"
-> "Grab every assignment rubric and build me a visual dashboard of what I need to hit for an A"
+1. **Clone the repository:**
+   ```bash
+   git clone https://github.com/redmondmj/brightspace-mcp-server.git
+   cd brightspace-mcp-server
+   ```
 
-## Steps to Install
+2. **Install dependencies & secure:**
+   ```bash
+   npm install
+   npm audit fix
+   ```
 
-**You need:** [Node.js 18+](https://nodejs.org/) (download the LTS version)
+3. **Configure environment:**
+   Create a `.env` file in the root directory:
+   ```env
+   D2L_BASE_URL=https://your-school.brightspace.com
+   D2L_USERNAME=your_username
+   ```
 
-**Purdue students:**
-```bash
-npx brightspace-mcp-server setup --purdue
-```
+4. **Initialize Authentication:**
+   Run the browser-based auth tool to capture your full session cookies (including CSRF tokens):
+   ```bash
+   npm run auth
+   ```
+   *Note: Approve the Duo/MFA request on your phone when prompted.*
 
-**Everyone else:**
-```bash
-npx brightspace-mcp-server setup
-```
+5. **Build the project:**
+   ```bash
+   npm run build
+   ```
 
-This command might take a few minutes to download, especially on Windows. Please be patient.
+## Connect to Claude Desktop
 
-The wizard handles everything: credentials, MFA, and configuring your AI client. When it's done, restart Claude/Cursor and start asking questions.
+Add the following to your `%APPDATA%\Claude\claude_desktop_config.json`:
 
-That's it! You're ready to go.
-
-## Manual Configuration
-
-The setup wizard auto-configures Claude Desktop and Cursor. For other clients, add the server manually:
-
-> **💡 Tip:** Already using Claude Code, Codex, or another AI coding assistant? Just paste this GitHub link and ask it to configure the Brightspace MCP for you: `https://github.com/RohanMuppa/brightspace-mcp-server`
-
-**Claude Code (CLI):**
-```bash
-claude mcp add brightspace -- npx -y brightspace-mcp-server@latest
-```
-
-**Claude Desktop** (`~/Library/Application Support/Claude/claude_desktop_config.json` on Mac, `%APPDATA%\Claude\claude_desktop_config.json` on Windows):
-
-Mac/Linux:
 ```json
 {
   "mcpServers": {
-    "brightspace": {
-      "command": "npx",
-      "args": ["-y", "brightspace-mcp-server@latest"]
+    "brightspace-faculty": {
+      "command": "node",
+      "args": ["C:/PATH/TO/YOUR/brightspace-mcp-server/build/index.js"],
+      "env": {
+        "D2L_BASE_URL": "https://your-school.brightspace.com",
+        "D2L_USERNAME": "your_username"
+      }
     }
   }
 }
 ```
+*Replace `C:/PATH/TO/YOUR/` with your actual project path.*
 
-Windows:
-```json
-{
-  "mcpServers": {
-    "brightspace": {
-      "command": "cmd",
-      "args": ["/c", "npx", "-y", "brightspace-mcp-server@latest"]
-    }
-  }
-}
-```
+## Faculty Features
 
-**ChatGPT Desktop** (Settings → Tools → Add MCP tool → "Add manually"):
+In addition to standard "read" operations, this fork includes tools designed specifically for instructors:
 
-Mac/Linux:
-```json
-{
-  "command": "npx",
-  "args": ["-y", "brightspace-mcp-server@latest"]
-}
-```
-
-Windows:
-```json
-{
-  "command": "cmd",
-  "args": ["/c", "npx", "-y", "brightspace-mcp-server@latest"]
-}
-```
-
-**Cursor** (`~/.cursor/mcp.json`):
-
-Mac/Linux:
-```json
-{
-  "mcpServers": {
-    "brightspace": {
-      "command": "npx",
-      "args": ["-y", "brightspace-mcp-server@latest"]
-    }
-  }
-}
-```
-
-Windows:
-```json
-{
-  "mcpServers": {
-    "brightspace": {
-      "command": "cmd",
-      "args": ["/c", "npx", "-y", "brightspace-mcp-server@latest"]
-    }
-  }
-}
-```
-
-After adding, restart your AI client. You still need to run `npx brightspace-mcp-server setup` first to save your credentials.
-
-## Session Expired?
-
-Sessions re-authenticate automatically. If auto-reauth fails (e.g., you missed the Duo push):
-
-```bash
-npx brightspace-mcp-server auth
-```
+- **Post Announcements**: `create_announcement` allows you to post live news items to your courses using standard HTML or plain text.
+- **CSRF-Protected Actions**: Automatically bypasses Brightspace's security tokens to enable "Write" operations that standard API integrations cannot perform.
+- **Full Session Authority**: Uses browser session cookies instead of limited API tokens, granting the AI the same permissions you have in the web portal.
 
 ## What You Can Ask About
 
 | Topic | Examples |
 |-------|---------|
-| Grades | "Am I passing all my classes?" · "Compare my grades across all courses" |
-| Assignments | "What's due in the next 48 hours?" · "Summarize every assignment I haven't turned in yet" |
-| Announcements | "Did any professor post something important today?" · "What did my CS prof announce this week?" |
-| Course content | "Find the midterm review slides" · "Download every PDF from Module 5" |
-| Roster | "Who are the TAs for ECE 264?" · "Get me my instructor's email" |
-| Discussions | "What are people saying in the final project thread?" · "Summarize the latest discussion posts" |
-| Planning | "Build me a study schedule based on my upcoming due dates" · "Which class needs the most attention right now?" |
-
-## Troubleshooting
-
-**"Not authenticated"** → Run `npx brightspace-mcp-server auth`
-
-**AI client not responding** → Quit and reopen it completely (not just close the window)
-
-**Need to redo setup** → Run `npx brightspace-mcp-server setup` again
-
-**Config location** → `~/.brightspace-mcp/config.json` (you can edit this directly)
-
-**Browser launch times out (Windows)** → Open Task Manager, end all Chromium/Chrome processes, and try again. If it persists, add the Playwright Chromium folder to your antivirus exclusion list.
-
-**Auth fails in WSL or Docker** → Chromium dependencies may be missing. Run `npx playwright install-deps chromium` to install them. The server automatically adds `--no-sandbox` for these environments.
-
-**Headless login fails (Windows)** → SSO login flows can fail in headless mode on Windows. The default is headed (a browser window opens). If you set `D2L_HEADLESS=true` and auth fails, switch back to headed mode.
-
-## Security
-
-- Credentials stay on your machine at `~/.brightspace-mcp/config.json` (restricted permissions)
-- Session tokens are encrypted (AES-256-GCM)
-- All traffic to Brightspace is HTTPS
-- Nothing is sent anywhere except your school's login page
+| **Faculty** | "Post an announcement to course 12345 titled 'Reminder' saying 'See you tomorrow!'" |
+| **Grades** | "Summarize the current grade distribution for my class" · "Compare my grades across all courses" |
+| **Assignments** | "What's due in the next 48 hours?" · "Show me all ungraded submissions" |
+| **Course Content** | "Find the latest lecture slides" · "Download every PDF from Module 5" |
+| **Class Management** | "Who are the TAs for my course?" · "Get me the student list for ECE 264" |
 
 ## Technical Implementation
 
-This project is a high-performance fork of the original Purdue University MCP server, expanded to support universal authentication and faculty-grade "write" operations.
+This project uses **Playwright** to launch an isolated browser context and intercept full session authority. By spoofing `Origin`/`Referer` headers and mirroring specific institutional JSON schemas (dual `Text/Html` bodies), it allows for seamless automation of tools normally restricted to the official D2L web interface.
 
-### Key Innovations:
-- **Client-Side Session Emulation**: Instead of requiring restricted admin-level API keys, the server uses **Playwright** to launch an isolated browser context. It intercepts and captures full session authority, including persistent cookies and the `d2l_rf` anti-XSRF tokens.
-- **Universal SSO Support**: Replaced university-specific login logic with a generic **Microsoft Entra ID (Azure AD)** flow, enabling automated MFA handling for any institution using Microsoft login portals.
-- **CSRF Bypass & Header Spoofing**: Enabled faculty features (like `create_announcement`) by injecting captured security tokens into raw HTTP requests and spoofing `Origin`/`Referer` headers to mirror real browser behavior.
-- **Payload Mirroring**: Dynamically adjusts JSON schemas to match specific institutional D2L versions, ensuring compatibility with both modern and legacy News/Grades services.
+## Security
 
-### Security Note:
-The server operates strictly within your existing user permissions. It does not bypass university security; it simply automates the tools you already have access to via the web interface. All sensitive session data is stored locally and encrypted using **AES-256-GCM**.
-
-## Built With
-
-![TypeScript](https://img.shields.io/badge/TypeScript-3178C6?logo=typescript&logoColor=white)
-![JavaScript](https://img.shields.io/badge/JavaScript-F7DF1E?logo=javascript&logoColor=black)
-![Node.js](https://img.shields.io/badge/Node.js-339933?logo=nodedotjs&logoColor=white)
-![Playwright](https://img.shields.io/badge/Playwright-2EAD33?logo=playwright&logoColor=white)
-![MCP](https://img.shields.io/badge/Model_Context_Protocol-black?logo=anthropic&logoColor=white)
-![D2L Brightspace](https://img.shields.io/badge/D2L_Brightspace-003865?logoColor=white)
-![npm](https://img.shields.io/badge/npm-CB3837?logo=npm&logoColor=white)
-
-## Updates
-
-Automatic. Every time your AI client starts a session, it runs `npx brightspace-mcp-server@latest` which pulls the newest version from npm. No action needed.
-
-If you ever suspect you're on an old version, run `npm cache clean --force` to clear the cache.
+- Session tokens are stored locally and encrypted using **AES-256-GCM**.
+- No credentials or session data are sent to any third party; communication is strictly between your machine and your school's Brightspace instance.
 
 ---
 
-Proudly made for Boilermakers by [Rohan Muppa](https://github.com/rohanmuppa) 🚂
-
-[Report a bug](https://github.com/rohanmuppa/brightspace-mcp-server/issues) · AGPL-3.0 · Copyright 2026 Rohan Muppa
+Original project by [Rohan Muppa](https://github.com/rohanmuppa) 🚂
+Faculty fork and expansion by [redmondmj](https://github.com/redmondmj)
