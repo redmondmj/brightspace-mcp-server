@@ -36,20 +36,23 @@ export function registerManageContent(
         const moduleData = {
           Title: title,
           ShortTitle: title.substring(0, 50),
-          Description: description ? {
-            Content: description,
-            Type: "Html"
-          } : null,
+          Description: {
+            Text: description ? description.replace(/<[^>]*>?/gm, "") : "",
+            Html: description ? (description.includes("<") ? description : `<p>${description}</p>`) : ""
+          },
           IsHidden: isHidden,
-          StartDate: null,
-          EndDate: null,
+          IsLocked: false,
+          ModuleStartDate: null,
+          ModuleEndDate: null,
+          ModuleDueDate: null,
         };
 
-        // If parentModuleId exists, POST to that module's structure
-        // Otherwise, POST to course root
+        log("INFO", `Sending moduleData to D2L (JSON, 1.57, Comprehensive): ${JSON.stringify(moduleData)}`);
+
+        // Use LE 1.57
         const path = parentModuleId 
-          ? apiClient.le(courseId, `/content/modules/${parentModuleId}/structure/`)
-          : apiClient.le(courseId, "/content/root/");
+          ? `/d2l/api/le/1.57/${courseId}/content/modules/${parentModuleId}/structure/`
+          : `/d2l/api/le/1.57/${courseId}/content/root/`;
 
         const result = await apiClient.post<any>(path, moduleData);
 
@@ -92,15 +95,19 @@ export function registerManageContent(
           TopicType: 3, // 3 = Link/URL
           Url: url,
           Description: description ? {
-            Content: description,
-            Type: "Html"
-          } : null,
+            Text: description.replace(/<[^>]*>?/gm, ""),
+            Html: description.includes("<") ? description : `<p>${description}</p>`
+          } : { Text: "", Html: "" },
           IsHidden: isHidden,
+          IsLocked: false,
           StartDate: null,
           EndDate: null,
+          DueDate: null,
         };
 
-        const path = apiClient.le(courseId, `/content/modules/${moduleId}/structure/`);
+        log("INFO", `Sending topicData to D2L (JSON, 1.57, Mirror): ${JSON.stringify(topicData)}`);
+
+        const path = `/d2l/api/le/1.57/${courseId}/content/modules/${moduleId}/structure/`;
         const result = await apiClient.post<any>(path, topicData);
 
         log("INFO", `create_link_topic: Successfully added link "${title}" to module ${moduleId}`);
