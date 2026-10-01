@@ -127,10 +127,10 @@ export class BrowserAuth {
         log("INFO", "Session cookies active — validating full session token");
 
         // Strategy 1: Extract session cookies for cookie-based API auth (Full permissions)
-        const cookieToken = await this.extractCookieToken(context);
+        const cookieToken = await this.extractCookieToken(context, page);
         if (cookieToken) {
           // Check if we got the critical CSRF token
-          const hasCsrf = cookieToken.includes("d2l_rf=");
+          const hasCsrf = BrowserAuth.hasCsrf(cookieToken);
           
           const valid = await this.validateToken(cookieToken);
           if (valid && hasCsrf) {
@@ -147,7 +147,31 @@ export class BrowserAuth {
           }
           
           if (!hasCsrf) {
-            log("WARN", "Existing session missing CSRF token (d2l_rf), forcing re-login to refresh security tokens");
+            log("WARN", "Existing session missing CSRF token (d2l_rf) - reloading to refresh it before forcing a full re-login");
+            // The SSO session itself is still valid (that's why alreadyAuthenticated is true) -
+            // d2l_rf just rotated/expired on its own shorter TTL. A simple reload is usually
+            // enough for D2L to reissue it, and avoids putting the user through an interactive
+            // SSO/MFA prompt for what is really just a stale CSRF cookie.
+            try {
+              await page.reload({ waitUntil: "networkidle", timeout: 30000 });
+              const refreshedToken = await this.extractCookieToken(context, page);
+              const refreshedHasCsrf = !!refreshedToken && BrowserAuth.hasCsrf(refreshedToken);
+              if (refreshedToken && refreshedHasCsrf && (await this.validateToken(refreshedToken))) {
+                log("INFO", "CSRF token refreshed via reload - no re-login needed");
+                const now = Date.now();
+                const tokenData: TokenData = {
+                  accessToken: refreshedToken,
+                  capturedAt: now,
+                  expiresAt: now + this.config.tokenTtl * 1000,
+                  source: "browser",
+                };
+                await this.saveStorageState(context);
+                return tokenData;
+              }
+              log("WARN", "Reload did not produce a valid CSRF cookie - forcing full re-login");
+            } catch (reloadError) {
+              log("WARN", "Reload-to-refresh-CSRF failed - forcing full re-login", reloadError);
+            }
           } else {
             log("WARN", "Cookie token failed validation, trying Bearer extraction");
           }
@@ -181,7 +205,39 @@ export class BrowserAuth {
         const freshPage = await context.newPage();
         const freshTokenPromise = this.setupTokenInterception(freshPage);
         await this.navigateAndLogin(freshPage);
-        const accessToken = await freshTokenPromise;
+
+        // This tenant (nscconline.brightspace.com) is cookie/CSRF-based rather than
+        // Bearer-token-based - after a fresh interactive login it never fires the
+        // Authorization: Bearer request setupTokenInterception is waiting for, so
+        // waiting on freshTokenPromise alone hung for its full 120s timeout with the
+        // browser window sitting open the whole time. Try the cookie strategy first
+        // (it's what actually works here) and only fall back to the Bearer capture,
+        // bounded much shorter than its own internal timeout, if that fails too.
+        const freshCookieToken = await this.extractCookieToken(context, freshPage);
+        const freshHasCsrf = !!freshCookieToken && BrowserAuth.hasCsrf(freshCookieToken);
+        if (freshCookieToken && freshHasCsrf && (await this.validateToken(freshCookieToken))) {
+          log("INFO", "Extracted valid session cookie with CSRF after forced re-login");
+          const now = Date.now();
+          const tokenData: TokenData = {
+            accessToken: freshCookieToken,
+            capturedAt: now,
+            expiresAt: now + this.config.tokenTtl * 1000,
+            source: "browser",
+          };
+          await this.saveStorageState(context);
+          return tokenData;
+        }
+
+        log("WARN", "No valid cookie token after re-login - waiting briefly for a Bearer token instead");
+        const accessToken = await Promise.race([
+          freshTokenPromise,
+          new Promise<string>((_, reject) =>
+            setTimeout(
+              () => reject(new BrowserAuthError("No Bearer token or valid cookie session after forced re-login", "token_interception")),
+              20000
+            )
+          ),
+        ]);
         log("INFO", "Bearer token captured after forced re-login");
         const now = Date.now();
         const tokenData: TokenData = {
@@ -194,9 +250,37 @@ export class BrowserAuth {
         return tokenData;
       }
 
-      // Normal flow: token captured during SSO redirect
-      log("INFO", "Waiting for Bearer token from network interception");
-      const accessToken = await tokenPromise;
+      // Normal flow after an interactive SSO login. This tenant is cookie/CSRF based and
+      // never sends a Bearer request, so try the cookie strategy first instead of sitting
+      // on tokenPromise for its full 120s (window left open, client gives up).
+      const loginCookieToken = await this.extractCookieToken(context, page);
+      if (
+        loginCookieToken &&
+        BrowserAuth.hasCsrf(loginCookieToken) &&
+        (await this.validateToken(loginCookieToken))
+      ) {
+        log("INFO", "Extracted valid session cookie with CSRF after SSO login");
+        const now = Date.now();
+        const tokenData: TokenData = {
+          accessToken: loginCookieToken,
+          capturedAt: now,
+          expiresAt: now + this.config.tokenTtl * 1000,
+          source: "browser",
+        };
+        await this.saveStorageState(context);
+        return tokenData;
+      }
+
+      log("INFO", "No cookie session after login - waiting briefly for a Bearer token");
+      const accessToken = await Promise.race([
+        tokenPromise,
+        new Promise<string>((_, reject) =>
+          setTimeout(
+            () => reject(new BrowserAuthError("No Bearer token or valid cookie session after SSO login", "token_interception")),
+            20000
+          )
+        ),
+      ]);
       log("INFO", "Bearer token captured successfully");
 
       const now = Date.now();
@@ -238,11 +322,25 @@ export class BrowserAuth {
       if (context) {
         log("DEBUG", "Closing browser context");
         try {
-          await context.close();
+          // Race close() against a timeout — on Windows this has been seen to hang
+          // (antivirus holding the process, a lingering CDP connection, etc.) without
+          // ever rejecting. The token is already captured by this point, so we don't
+          // block the caller on cleanup; a hung close leaves chrome.exe orphaned and
+          // may need a manual kill, but auth itself still succeeds.
+          await Promise.race([
+            context.close(),
+            new Promise<void>((_, reject) =>
+              setTimeout(
+                () => reject(new Error("context.close() timed out after 10s")),
+                10000
+              )
+            ),
+          ]);
         } catch (closeError) {
-          // Context may already be closed (e.g. browser crashed or was closed externally).
+          // Context may already be closed (e.g. browser crashed or was closed externally),
+          // or close() itself hung — see above.
           // This is common on Windows where the browser process can terminate unexpectedly.
-          log("DEBUG", "Browser context already closed or failed to close", closeError);
+          log("DEBUG", "Browser context already closed or close() timed out", closeError);
         }
       }
     }
@@ -260,7 +358,7 @@ export class BrowserAuth {
       };
 
       if (token.startsWith("cookie:")) {
-        headers["Cookie"] = token.substring(7);
+        headers["Cookie"] = token.substring(7).split("||csrf=")[0];
       } else {
         headers["Authorization"] = `Bearer ${token}`;
       }
@@ -495,8 +593,14 @@ export class BrowserAuth {
    * Extract D2L session cookies that can be used for cookie-based API auth.
    * Constructs a cookie header string from all available D2L cookies.
    */
+  /** True if a cookie token carries a CSRF value (d2l_rf cookie or localStorage XSRF.Token). */
+  private static hasCsrf(token: string): boolean {
+    return token.includes("d2l_rf=") || token.includes("||csrf=");
+  }
+
   private async extractCookieToken(
-    context: BrowserContext
+    context: BrowserContext,
+    page?: Page
   ): Promise<string | null> {
     try {
       // Just wait a few seconds for all background cookies (including CSRF) to settle
@@ -530,7 +634,17 @@ export class BrowserAuth {
       if (hasCsrf) {
         log("INFO", "CSRF token (d2l_rf) successfully captured");
       } else {
-        log("WARN", "d2l_rf cookie still missing - POST requests may fail");
+        // nscconline.brightspace.com never sets d2l_rf; D2L keeps the CSRF value in
+        // localStorage "XSRF.Token" instead. Carry it alongside the cookies so the API
+        // client can send it as X-Csrf-Token (client.ts splits on "||csrf=").
+        const xsrf = page
+          ? await page.evaluate(() => localStorage.getItem("XSRF.Token")).catch(() => null)
+          : null;
+        if (xsrf) {
+          log("INFO", "CSRF token taken from localStorage XSRF.Token");
+          return `cookie:${cookieStr}||csrf=${xsrf}`;
+        }
+        log("WARN", "No d2l_rf cookie or XSRF.Token - POST requests may fail");
       }
 
       return `cookie:${cookieStr}`;
