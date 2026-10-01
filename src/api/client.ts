@@ -554,13 +554,18 @@ export class D2LApiClient {
     // Auto-detect cookie vs Bearer auth based on "cookie:" prefix
     if (token.accessToken.startsWith("cookie:")) {
       // Cookie-based auth: strip prefix and set Cookie header
-      const cookieString = token.accessToken.substring(7);
+      const [cookieString, storedCsrf] = token.accessToken.substring(7).split("||csrf=");
       headers["Cookie"] = cookieString;
+      if (storedCsrf) {
+        headers["X-Csrf-Token"] = storedCsrf;
+      }
       log("DEBUG", "Using cookie-based authentication");
 
       // Extract CSRF token (d2l_rf) from cookies if present
       const csrfMatch = cookieString.match(/d2l_rf=([^;]+)/);
-      if (csrfMatch && csrfMatch[1]) {
+      if (storedCsrf) {
+        log("DEBUG", "Using CSRF token from localStorage XSRF.Token");
+      } else if (csrfMatch && csrfMatch[1]) {
         headers["X-Csrf-Token"] = csrfMatch[1];
         log("DEBUG", `CSRF token extracted: ${csrfMatch[1].substring(0, 5)}...`);
       } else {

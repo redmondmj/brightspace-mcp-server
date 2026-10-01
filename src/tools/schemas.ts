@@ -71,6 +71,25 @@ export const CreateLinkTopicSchema = z.object({
   isHidden: z.boolean().default(false).describe("Whether the topic is hidden from students. Default is false."),
 });
 
+export const BulkCourseContentItemSchema = z.object({
+  type: z.enum(["link", "html", "file"]).default("link").describe("Type of item to add to the module."),
+  title: z.string().min(1).describe("Title of the module item."),
+  url: z.string().url().optional().describe("URL for a link item."),
+  content: z.string().optional().describe("HTML content for a page-style item."),
+  description: z.string().optional().describe("Optional description for the item."),
+  isHidden: z.boolean().default(false).describe("Whether the item should be hidden from students."),
+});
+
+export const BulkCourseContentSchema = z.object({
+  courseId: z.coerce.number().int().positive().describe("Course ID to create content in."),
+  modules: z.array(z.object({
+    title: z.string().min(1).describe("Title of the module."),
+    description: z.string().optional().describe("Optional description for the module."),
+    isHidden: z.boolean().default(false).describe("Whether the module is hidden from students."),
+    items: z.array(BulkCourseContentItemSchema).default([]).describe("Items to create inside this module."),
+  })).min(1).describe("Module templates to create in bulk."),
+});
+
 export const GetClasslistEmailsSchema = z.object({
   courseId: z.coerce.number().int().positive()
     .describe("Course ID to get emails for."),

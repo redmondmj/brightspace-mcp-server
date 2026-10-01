@@ -146,13 +146,24 @@ export class MicrosoftSSOFlow {
     try {
       log("DEBUG", "Waiting for Microsoft login password field");
       // Password field might take a second to appear after entering email
-      await page.waitForSelector(SELECTORS.password, { timeout: 20000 });
+      // Passwordless (FIDO key / passkey / Authenticator) flows may never show a
+      // password box - don't treat its absence as a failure.
+      const hasPasswordField = await page
+        .waitForSelector(SELECTORS.password, { timeout: 20000 })
+        .then(() => true)
+        .catch(() => false);
+      if (!hasPasswordField) {
+        log("INFO", "No password field - assuming passwordless sign-in, continuing to MFA");
+        return;
+      }
 
       if (!this.config.password) {
-        throw new BrowserAuthError(
-          "Password is required for SSO login",
-          "credentials"
-        );
+        // No stored password (by design - see 2026-09-28 auth review). Let the user
+        // type it in the visible browser window, then carry on to MFA.
+        log("WARN", "No stored password - enter it in the browser window (180s)");
+        await page.waitForSelector(SELECTORS.password, { state: "detached", timeout: 180000 });
+        await page.waitForLoadState("networkidle").catch(() => undefined);
+        return;
       }
 
       log("INFO", "Entering password");
